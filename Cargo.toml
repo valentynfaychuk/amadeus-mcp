@@ -1,0 +1,36 @@
+[package]
+name = "amadeus-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "amadeus-mcp"
+required-features = ["stdio"]
+
+[features]
+default = ["stdio"]
+stdio = []
+http = []
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+schemars = { version = "1.1", features = ["derive"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.41", features = ["full", "tracing"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tokio-retry = "0.3"
+anyhow = "1.0"
+rmcp = { version = "0.5", features = ["server", "macros", "transport-io"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = "0.4"
+wasm-bindgen = "0.2"
+getrandom = { version = "0.2", features = ["js"] }
