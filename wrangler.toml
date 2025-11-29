@@ -8,3 +8,10 @@ BLOCKCHAIN_URL = "https://nodes.amadeus.bot"
 [[d1_databases]]
 binding = "MCP_DATABASE"
 database_id = "8b647505-cc6d-4969-83a6-912d4a0863f3"
+
+[observability]
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
