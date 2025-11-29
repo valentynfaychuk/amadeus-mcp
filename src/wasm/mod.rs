@@ -141,36 +141,39 @@ fn ok<T: serde::Serialize>(data: &T) -> Value {
 
 async fn faucet_create_order(env: &Env, args: &Value) -> std::result::Result<Value, Value> {
     let phone = args["phone"].as_str().ok_or_else(|| err("missing phone"))?;
-    let mut buf = [0u8; 6];
-    getrandom::getrandom(&mut buf).map_err(|e| err(&e.to_string()))?;
-    let otp: String = buf.iter().map(|b| ((b % 10) + b'0') as char).collect();
 
+    // Check if phone already claimed faucet
     let db = env.d1("MCP_DATABASE").map_err(|e| err(&e.to_string()))?;
-    db.prepare("INSERT OR REPLACE INTO otp_requests (phone, otp) VALUES (?1, ?2)")
-        .bind(&[phone.into(), otp.as_str().into()]).map_err(|e| err(&e.to_string()))?
-        .run().await.map_err(|e| err(&e.to_string()))?;
+    let existing = db.prepare("SELECT 1 FROM faucet_orders WHERE phone = ?1")
+        .bind(&[phone.into()]).map_err(|e| err(&e.to_string()))?
+        .first::<i32>(None).await.map_err(|e| err(&e.to_string()))?;
+    if existing.is_some() { return Err(err("phone already used faucet")); }
 
-    send_sms(env, phone, &format!("Your Amadeus faucet code: {}", otp)).await?;
+    // Send OTP via Twilio Verify
+    twilio_verify_send(env, phone).await?;
     Ok(ok(&json!({ "status": "success", "message": "OTP sent" })))
 }
 
 async fn faucet_complete_order(_client: &BlockchainClient, env: &Env, args: &Value) -> std::result::Result<Value, Value> {
     let phone = args["phone"].as_str().ok_or_else(|| err("missing phone"))?;
-    let otp = args["otp"].as_str().ok_or_else(|| err("missing otp"))?;
+    let code = args["otp"].as_str().ok_or_else(|| err("missing otp"))?;
     let address = args["address"].as_str().ok_or_else(|| err("missing address"))?;
 
+    // Check if phone already claimed
     let db = env.d1("MCP_DATABASE").map_err(|e| err(&e.to_string()))?;
-    let row = db.prepare("SELECT otp FROM otp_requests WHERE phone = ?1")
+    let existing = db.prepare("SELECT 1 FROM faucet_orders WHERE phone = ?1")
         .bind(&[phone.into()]).map_err(|e| err(&e.to_string()))?
-        .first::<String>(Some("otp")).await.map_err(|e| err(&e.to_string()))?;
+        .first::<i32>(None).await.map_err(|e| err(&e.to_string()))?;
+    if existing.is_some() { return Err(err("phone already used faucet")); }
 
-    let stored_otp = row.ok_or_else(|| err("no pending order for this phone"))?;
-    if stored_otp != otp { return Err(err("invalid OTP")); }
+    // Verify OTP via Twilio Verify
+    let status = twilio_verify_check(env, phone, code).await?;
+    if status != "approved" { return Err(err("invalid or expired OTP")); }
 
+    // Mint tokens
     let tx_hash = mint::mint_tokens(env, address).await?;
 
-    db.prepare("DELETE FROM otp_requests WHERE phone = ?1").bind(&[phone.into()]).map_err(|e| err(&e.to_string()))?
-        .run().await.map_err(|e| err(&e.to_string()))?;
+    // Log successful claim
     db.prepare("INSERT INTO faucet_orders (phone, address) VALUES (?1, ?2)")
         .bind(&[phone.into(), address.into()]).map_err(|e| err(&e.to_string()))?
         .run().await.map_err(|e| err(&e.to_string()))?;
@@ -178,26 +181,49 @@ async fn faucet_complete_order(_client: &BlockchainClient, env: &Env, args: &Val
     Ok(ok(&json!({ "status": "success", "message": "tokens minted", "tx_hash": tx_hash })))
 }
 
-async fn send_sms(env: &Env, to: &str, body: &str) -> std::result::Result<(), Value> {
-    let sid = env.var("TWILIO_ACCOUNT_SID").map(|v| v.to_string()).map_err(|_| err("twilio not configured"))?;
-    let token = env.var("TWILIO_AUTH_TOKEN").map(|v| v.to_string()).map_err(|_| err("twilio not configured"))?;
-    let from = env.var("TWILIO_FROM_PHONE").map(|v| v.to_string()).map_err(|_| err("twilio not configured"))?;
+fn twilio_auth(env: &Env) -> std::result::Result<(String, String), Value> {
+    let api_key = env.var("TWILIO_API_KEY_SID").map(|v| v.to_string()).map_err(|_| err("TWILIO_API_KEY_SID not set"))?;
+    let api_secret = env.var("TWILIO_API_KEY_SECRET").map(|v| v.to_string()).map_err(|_| err("TWILIO_API_KEY_SECRET not set"))?;
+    let service_sid = env.var("TWILIO_VERIFY_SERVICE_SID").map(|v| v.to_string()).map_err(|_| err("TWILIO_VERIFY_SERVICE_SID not set"))?;
+    Ok((base64_encode(&format!("{}:{}", api_key, api_secret)), service_sid))
+}
 
-    let url = format!("https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json", sid);
-    let auth = base64_encode(&format!("{}:{}", sid, token));
-    let form = format!("To={}&From={}&Body={}", urlenc(to), urlenc(&from), urlenc(body));
+async fn twilio_verify_send(env: &Env, to: &str) -> std::result::Result<(), Value> {
+    let (auth, service_sid) = twilio_auth(env)?;
+    let url = format!("https://verify.twilio.com/v2/Services/{}/Verifications", service_sid);
 
     let mut headers = Headers::new();
     headers.set("Authorization", &format!("Basic {}", auth)).map_err(|e| err(&e.to_string()))?;
     headers.set("Content-Type", "application/x-www-form-urlencoded").map_err(|e| err(&e.to_string()))?;
 
     let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers).with_body(Some(form.into()));
+    init.with_method(Method::Post).with_headers(headers)
+        .with_body(Some(format!("To={}&Channel=sms", urlenc(to)).into()));
+
     let req = Request::new_with_init(&url, &init).map_err(|e| err(&e.to_string()))?;
     let resp = Fetch::Request(req).send().await.map_err(|e| err(&e.to_string()))?;
-
-    if resp.status_code() >= 400 { return Err(err("failed to send SMS")); }
+    if resp.status_code() >= 400 { return Err(err("failed to send verification")); }
     Ok(())
+}
+
+async fn twilio_verify_check(env: &Env, to: &str, code: &str) -> std::result::Result<String, Value> {
+    let (auth, service_sid) = twilio_auth(env)?;
+    let url = format!("https://verify.twilio.com/v2/Services/{}/VerificationChecks", service_sid);
+
+    let mut headers = Headers::new();
+    headers.set("Authorization", &format!("Basic {}", auth)).map_err(|e| err(&e.to_string()))?;
+    headers.set("Content-Type", "application/x-www-form-urlencoded").map_err(|e| err(&e.to_string()))?;
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post).with_headers(headers)
+        .with_body(Some(format!("To={}&Code={}", urlenc(to), urlenc(code)).into()));
+
+    let req = Request::new_with_init(&url, &init).map_err(|e| err(&e.to_string()))?;
+    let mut resp = Fetch::Request(req).send().await.map_err(|e| err(&e.to_string()))?;
+    if resp.status_code() >= 400 { return Err(err("verification check failed")); }
+
+    let body: Value = resp.json().await.map_err(|e| err(&e.to_string()))?;
+    Ok(body["status"].as_str().unwrap_or("").to_string())
 }
 
 fn base64_encode(s: &str) -> String {
