@@ -4,6 +4,13 @@ compatibility_date = "2024-01-01"
 
 [vars]
 BLOCKCHAIN_URL = "https://nodes.amadeus.bot"
+AMADEUS_TESTNET_RPC = "https://nodes.amadeus.bot"
+
+# Secrets (set via `wrangler secret put <NAME>`):
+# - TWILIO_VERIFY_SERVICE_SID
+# - TWILIO_API_KEY_SID
+# - TWILIO_API_KEY_SECRET
+# - AMADEUS_TESTNET_MINT_KEY
 
 [[d1_databases]]
 binding = "MCP_DATABASE"
