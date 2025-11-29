@@ -2,29 +2,43 @@
 
 MCP server enabling AI agents to interact with the Amadeus blockchain.
 
-## Quick Start
+## Usage
 
-### Stdio Mode
+### Install in Gemini CLI
 
-```bash
-cargo build --release
-./target/release/amadeus-mcp
+See [Gemini CLI Configuration](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html) for details.
+
+Open the Gemini CLI settings file. The location is `~/.gemini/settings.json`.
+Add the following to the `mcpServers` object in your `settings.json` file:
+
+```json
+{
+  "mcpServers": {
+    "amadeus": {
+      "httpUrl": "https://amadeus-mcp.faychuk.workers.dev",
+    }
+  }
+}
 ```
 
-### HTTP Mode (Cloudflare Workers)
+### Install in Claude Code
 
-Local dev:
-```bash
-npm i -g wrangler
-cargo install worker-build
-wrangler dev
+Run this command. See [Claude Code MCP docs](https://docs.anthropic.com/en/docs/claude-code/mcp) for more info.
+
+```sh
+claude mcp add --transport http amadeus https://amadeus-mcp.faychuk.workers.dev
 ```
 
-Production (build locally, then deploy):
-```bash
-scripts/build.sh
-wrangler deploy
-wrangler secret put BLOCKCHAIN_API_KEY
+Or open the Claude Code config file. The location is `~/.claude.json`.
+Find the following to the `mcpServers` object in the desired folder section:
+
+```json
+"mcpServers": {
+  "amadeus": {
+    "type": "http",
+    "url": "https://amadeus-mcp.faychuk.workers.dev"
+  }
+}
 ```
 
 ## Tools
@@ -48,7 +62,33 @@ wrangler secret put BLOCKCHAIN_API_KEY
 ### Smart Contract Tools
 - `get_contract_state` - Query smart contract storage by address and key
 
-## Configuration
+## Development
+
+### Quick Start
+
+#### Stdio Mode
+
+```bash
+cargo build --release
+./target/release/amadeus-mcp
+```
+
+#### HTTP Mode (Cloudflare Workers)
+
+Local dev:
+```bash
+npm i -g wrangler
+cargo install worker-build
+wrangler dev
+```
+
+Production (build locally, then deploy):
+```bash
+scripts/build.sh
+wrangler deploy
+wrangler secret put BLOCKCHAIN_API_KEY
+```
+### Configuration
 
 ```bash
 BLOCKCHAIN_URL=https://nodes.amadeus.bot

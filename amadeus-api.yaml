@@ -30,6 +30,8 @@ info:
     url: https://opensource.org/licenses/MIT
 
 servers:
+  - url: https://nodes.amadeus.bot
+    description: Amadeus production API (default)
   - url: http://72.9.144.110
     description: Amadeus seed node (primary)
   - url: http://167.235.169.185
@@ -490,6 +492,107 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AllBalancesResponse'
+
+  /api/v1/tx/build:
+    post:
+      tags: [transaction]
+      summary: Build unsigned transaction
+      description: |
+        Creates an unsigned transaction blob for transferring assets between accounts.
+        The returned blob must be signed by the sender before submission.
+      operationId: buildTransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [transfer]
+                  description: Transaction type
+                from:
+                  type: string
+                  description: Sender address (Base58-encoded public key)
+                to:
+                  type: string
+                  description: Recipient address (Base58-encoded public key)
+                asset:
+                  type: string
+                  description: Token symbol (e.g., AMA, USDT)
+                amount:
+                  type: string
+                  description: Amount to transfer
+                memo:
+                  type: string
+                  description: Optional transaction memo
+              required: [type, from, to, asset, amount]
+      responses:
+        '200':
+          description: Unsigned transaction blob created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnsignedTransactionResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d '{"type":"transfer","from":"7EVU...","to":"7UTN...","asset":"AMA","amount":"100"}' \
+              "http://72.9.144.110/api/v1/tx/build"
+
+  /api/v1/tx/submit:
+    post:
+      tags: [transaction]
+      summary: Submit signed transaction (JSON)
+      description: |
+        Submits a signed transaction to the network for processing.
+        The transaction blob and signature are provided as JSON.
+      operationId: submitSignedTransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                transaction:
+                  type: string
+                  description: The unsigned transaction blob (from /api/v1/tx/build)
+                signature:
+                  type: string
+                  description: Base58-encoded signature of the signing_payload
+              required: [transaction, signature]
+      responses:
+        '200':
+          description: Transaction submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionSubmitResponse'
+        '400':
+          description: Invalid transaction or signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codeSamples:
+        - lang: curl
+          label: cURL
+          source: |
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d '{"transaction":"...blob...","signature":"...sig..."}' \
+              "http://72.9.144.110/api/v1/tx/submit"
 
   /api/tx/submit:
     post:
@@ -1002,6 +1105,20 @@ components:
           description: Human-readable balance
           example: 1000.0
       required: [symbol, flat, float]
+
+    UnsignedTransactionResponse:
+      type: object
+      properties:
+        blob:
+          type: string
+          description: The unsigned transaction blob to be signed
+        signing_payload:
+          type: string
+          description: The payload that must be signed by the sender's private key
+        transaction_hash:
+          type: string
+          description: The transaction hash (for reference before submission)
+      required: [blob, signing_payload, transaction_hash]
 
     TransactionSubmitResponse:
       type: object
