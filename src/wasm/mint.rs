@@ -2,7 +2,7 @@ use super::tx;
 use serde_json::{json, Value};
 use worker::Env;
 
-const FAUCET_AMOUNT: i128 = 10_000_000_000;
+const FAUCET_AMOUNT: i128 = 100_000_000_000;
 const FAUCET_SYMBOL: &str = "AMA";
 
 pub async fn transfer(env: &Env, address: &str) -> Result<String, Value> {
