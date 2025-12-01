@@ -16,8 +16,9 @@ async fn main(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .map_err(|e| format!("failed to create client: {}", e))?;
 
     if req.method() == Method::Post {
+        let client_ip = req.headers().get("CF-Connecting-IP").ok().flatten();
         let body: Value = req.json().await?;
-        Response::from_json(&handle_mcp_request(&client, &env, body).await)
+        Response::from_json(&handle_mcp_request(&client, &env, client_ip, body).await)
     } else {
         Response::from_json(&json!({
             "name": "amadeus-mcp",
@@ -27,7 +28,7 @@ async fn main(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 }
 
-async fn handle_mcp_request(client: &BlockchainClient, env: &Env, request: Value) -> Value {
+async fn handle_mcp_request(client: &BlockchainClient, env: &Env, client_ip: Option<String>, request: Value) -> Value {
     let method = request["method"].as_str().unwrap_or("");
     let id = request.get("id").cloned();
 
@@ -38,7 +39,7 @@ async fn handle_mcp_request(client: &BlockchainClient, env: &Env, request: Value
             "serverInfo": { "name": "amadeus-mcp", "version": env!("CARGO_PKG_VERSION") }
         })),
         "tools/list" => Ok(tools_list()),
-        "tools/call" => handle_tool_call(client, env, &request["params"]).await,
+        "tools/call" => handle_tool_call(client, env, client_ip, &request["params"]).await,
         _ => Err(err("unknown method")),
     };
 
@@ -48,7 +49,7 @@ async fn handle_mcp_request(client: &BlockchainClient, env: &Env, request: Value
     }
 }
 
-async fn handle_tool_call(client: &BlockchainClient, env: &Env, params: &Value) -> std::result::Result<Value, Value> {
+async fn handle_tool_call(client: &BlockchainClient, env: &Env, client_ip: Option<String>, params: &Value) -> std::result::Result<Value, Value> {
     let tool = params["name"].as_str().unwrap_or("");
     let args = &params["arguments"];
 
@@ -97,8 +98,7 @@ async fn handle_tool_call(client: &BlockchainClient, env: &Env, params: &Value) 
                 .map(|s| ok(&json!({ "contract_address": addr, "key": key, "value": s })))
                 .map_err(|e| err(&e.to_string()))
         }
-        "faucet_create_order" => faucet_create_order(env, args).await,
-        "faucet_complete_order" => faucet_complete_order(client, env, args).await,
+        "claim_testnet_ama" => claim_testnet_ama(env, client_ip, args).await,
         _ => Err(err("unknown tool")),
     }
 }
@@ -122,10 +122,8 @@ fn tools_list() -> Value {
         tool("get_validators", "Retrieves the list of current validator nodes", json!({}), vec![]),
         tool("get_contract_state", "Retrieves a specific value from smart contract storage",
             json!({ "contract_address": str_prop(), "key": str_prop() }), vec!["contract_address", "key"]),
-        tool("faucet_create_order", "Creates a faucet order by sending OTP to phone number for verification",
-            json!({ "phone": str_prop() }), vec!["phone"]),
-        tool("faucet_complete_order", "Completes a faucet order by verifying OTP and minting testnet tokens",
-            json!({ "phone": str_prop(), "otp": str_prop(), "address": str_prop() }), vec!["phone", "otp", "address"]),
+        tool("claim_testnet_ama", "Claims testnet AMA tokens to the specified address (once per 24 hours per IP)",
+            json!({ "address": str_prop() }), vec!["address"]),
     ]})
 }
 
@@ -139,114 +137,35 @@ fn ok<T: serde::Serialize>(data: &T) -> Value {
     json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(data).unwrap() }] })
 }
 
-async fn faucet_create_order(env: &Env, args: &Value) -> std::result::Result<Value, Value> {
-    let phone = args["phone"].as_str().ok_or_else(|| err("missing phone"))?;
+const CLAIM_COOLDOWN_SECS: i64 = 86400;
 
-    // Check if phone already claimed faucet
-    let db = env.d1("MCP_DATABASE").map_err(|e| err(&e.to_string()))?;
-    let existing = db.prepare("SELECT 1 FROM faucet_orders WHERE phone = ?1")
-        .bind(&[phone.into()]).map_err(|e| err(&e.to_string()))?
-        .first::<i32>(None).await.map_err(|e| err(&e.to_string()))?;
-    if existing.is_some() { return Err(err("phone already used faucet")); }
-
-    // Send OTP via Twilio Verify
-    twilio_verify_send(env, phone).await?;
-    Ok(ok(&json!({ "status": "success", "message": "OTP sent" })))
-}
-
-async fn faucet_complete_order(_client: &BlockchainClient, env: &Env, args: &Value) -> std::result::Result<Value, Value> {
-    let phone = args["phone"].as_str().ok_or_else(|| err("missing phone"))?;
-    let code = args["otp"].as_str().ok_or_else(|| err("missing otp"))?;
+async fn claim_testnet_ama(env: &Env, client_ip: Option<String>, args: &Value) -> std::result::Result<Value, Value> {
+    let ip = client_ip.ok_or_else(|| err("could not determine client IP"))?;
     let address = args["address"].as_str().ok_or_else(|| err("missing address"))?;
+    let now = Date::now().as_millis() as i64 / 1000;
 
-    // Check if phone already claimed
     let db = env.d1("MCP_DATABASE").map_err(|e| err(&e.to_string()))?;
-    let existing = db.prepare("SELECT 1 FROM faucet_orders WHERE phone = ?1")
-        .bind(&[phone.into()]).map_err(|e| err(&e.to_string()))?
-        .first::<i32>(None).await.map_err(|e| err(&e.to_string()))?;
-    if existing.is_some() { return Err(err("phone already used faucet")); }
+    let existing: Option<i64> = db.prepare("SELECT claimed_at FROM faucet_claims WHERE ip = ?1")
+        .bind(&[ip.clone().into()]).map_err(|e| err(&e.to_string()))?
+        .first(Some("claimed_at")).await.map_err(|e| err(&e.to_string()))?;
 
-    // Verify OTP via Twilio Verify
-    let status = twilio_verify_check(env, phone, code).await?;
-    if status != "approved" { return Err(err("invalid or expired OTP")); }
+    if let Some(claimed_at) = existing {
+        let elapsed = now - claimed_at;
+        if elapsed < CLAIM_COOLDOWN_SECS {
+            let remaining = CLAIM_COOLDOWN_SECS - elapsed;
+            let hours = remaining / 3600;
+            let minutes = (remaining % 3600) / 60;
+            return Err(err(&format!("can only claim once per day, wait {}h {}m", hours, minutes)));
+        }
+        db.prepare("UPDATE faucet_claims SET claimed_at = ?1, address = ?2 WHERE ip = ?3")
+            .bind(&[now.into(), address.into(), ip.into()]).map_err(|e| err(&e.to_string()))?
+            .run().await.map_err(|e| err(&e.to_string()))?;
+    } else {
+        db.prepare("INSERT INTO faucet_claims (ip, address, claimed_at) VALUES (?1, ?2, ?3)")
+            .bind(&[ip.into(), address.into(), now.into()]).map_err(|e| err(&e.to_string()))?
+            .run().await.map_err(|e| err(&e.to_string()))?;
+    }
 
-    // Mint tokens
     let tx_hash = mint::mint_tokens(env, address).await?;
-
-    // Log successful claim
-    db.prepare("INSERT INTO faucet_orders (phone, address) VALUES (?1, ?2)")
-        .bind(&[phone.into(), address.into()]).map_err(|e| err(&e.to_string()))?
-        .run().await.map_err(|e| err(&e.to_string()))?;
-
-    Ok(ok(&json!({ "status": "success", "message": "tokens minted", "tx_hash": tx_hash })))
-}
-
-fn twilio_auth(env: &Env) -> std::result::Result<(String, String), Value> {
-    let api_key = env.var("TWILIO_API_KEY_SID").map(|v| v.to_string()).map_err(|_| err("TWILIO_API_KEY_SID not set"))?;
-    let api_secret = env.var("TWILIO_API_KEY_SECRET").map(|v| v.to_string()).map_err(|_| err("TWILIO_API_KEY_SECRET not set"))?;
-    let service_sid = env.var("TWILIO_VERIFY_SERVICE_SID").map(|v| v.to_string()).map_err(|_| err("TWILIO_VERIFY_SERVICE_SID not set"))?;
-    Ok((base64_encode(&format!("{}:{}", api_key, api_secret)), service_sid))
-}
-
-async fn twilio_verify_send(env: &Env, to: &str) -> std::result::Result<(), Value> {
-    let (auth, service_sid) = twilio_auth(env)?;
-    let url = format!("https://verify.twilio.com/v2/Services/{}/Verifications", service_sid);
-
-    let mut headers = Headers::new();
-    headers.set("Authorization", &format!("Basic {}", auth)).map_err(|e| err(&e.to_string()))?;
-    headers.set("Content-Type", "application/x-www-form-urlencoded").map_err(|e| err(&e.to_string()))?;
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers)
-        .with_body(Some(format!("To={}&Channel=sms", urlenc(to)).into()));
-
-    let req = Request::new_with_init(&url, &init).map_err(|e| err(&e.to_string()))?;
-    let resp = Fetch::Request(req).send().await.map_err(|e| err(&e.to_string()))?;
-    if resp.status_code() >= 400 { return Err(err("failed to send verification")); }
-    Ok(())
-}
-
-async fn twilio_verify_check(env: &Env, to: &str, code: &str) -> std::result::Result<String, Value> {
-    let (auth, service_sid) = twilio_auth(env)?;
-    let url = format!("https://verify.twilio.com/v2/Services/{}/VerificationCheck", service_sid);
-
-    let mut headers = Headers::new();
-    headers.set("Authorization", &format!("Basic {}", auth)).map_err(|e| err(&e.to_string()))?;
-    headers.set("Content-Type", "application/x-www-form-urlencoded").map_err(|e| err(&e.to_string()))?;
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers)
-        .with_body(Some(format!("To={}&Code={}", urlenc(to), urlenc(code)).into()));
-
-    let req = Request::new_with_init(&url, &init).map_err(|e| err(&e.to_string()))?;
-    let mut resp = Fetch::Request(req).send().await.map_err(|e| err(&e.to_string()))?;
-    let body: Value = resp.json().await.map_err(|e| err(&e.to_string()))?;
-
-    if resp.status_code() >= 400 {
-        let message = body["message"].as_str().unwrap_or("verification check failed");
-        return Err(err(message));
-    }
-
-    Ok(body["status"].as_str().unwrap_or("").to_string())
-}
-
-fn base64_encode(s: &str) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let bytes = s.as_bytes();
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let b = [chunk.get(0).copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        out.push(CHARS[(b[0] >> 2) as usize] as char);
-        out.push(CHARS[((b[0] & 3) << 4 | b[1] >> 4) as usize] as char);
-        out.push(if chunk.len() > 1 { CHARS[((b[1] & 15) << 2 | b[2] >> 6) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { CHARS[(b[2] & 63) as usize] as char } else { '=' });
-    }
-    out
-}
-
-fn urlenc(s: &str) -> String {
-    s.chars().map(|c| match c {
-        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-        _ => format!("%{:02X}", c as u8),
-    }).collect()
+    Ok(ok(&json!({ "status": "success", "tx_hash": tx_hash })))
 }

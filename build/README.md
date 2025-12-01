@@ -62,6 +62,9 @@ Find the following to the `mcpServers` object in the desired folder section:
 ### Smart Contract Tools
 - `get_contract_state` - Query smart contract storage by address and key
 
+### Faucet Tools
+- `claim_testnet_ama` - Claim testnet AMA tokens (once per 24 hours per IP)
+
 ## Development
 
 ### Quick Start
@@ -92,10 +95,14 @@ wrangler secret put BLOCKCHAIN_API_KEY
 
 ```bash
 BLOCKCHAIN_URL=https://nodes.amadeus.bot
-MCP_DATABASE (D1 address provided by Cloudflare)
-TWILIO_API_KEY_SID
-TWILIO_API_KEY_SECRET
-TWILIO_VERIFY_SERVICE_SID
-AMADEUS_TESTNET_RPC
-AMADEUS_TESTNET_MINT_KEY
+AMADEUS_TESTNET_RPC=https://nodes.amadeus.bot
+AMADEUS_TESTNET_MINT_KEY (secret)
+MCP_DATABASE (D1 binding)
+```
+
+### Database Migration
+
+Create the faucet_claims table in D1:
+```sql
+CREATE TABLE faucet_claims (ip TEXT PRIMARY KEY, address TEXT, claimed_at INTEGER);
 ```
