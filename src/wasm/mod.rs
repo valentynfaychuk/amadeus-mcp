@@ -4,6 +4,7 @@ mod tx;
 use crate::blockchain::*;
 use crate::BlockchainClient;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use worker::*;
 
 #[event(fetch)]
@@ -18,8 +19,13 @@ async fn main(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
     if req.method() == Method::Post {
         let client_ip = req.headers().get("CF-Connecting-IP").ok().flatten();
+        let headers: HashMap<String, String> = req
+            .headers()
+            .entries()
+            .map(|(k, v)| (k, v))
+            .collect();
         let body: Value = req.json().await?;
-        Response::from_json(&handle_mcp_request(&client, &env, client_ip, body).await)
+        Response::from_json(&handle_mcp_request(&client, &env, client_ip, headers, body).await)
     } else {
         Response::from_json(&json!({
             "name": "amadeus-mcp",
@@ -33,6 +39,7 @@ async fn handle_mcp_request(
     client: &BlockchainClient,
     env: &Env,
     client_ip: Option<String>,
+    headers: HashMap<String, String>,
     request: Value,
 ) -> Value {
     let method = request["method"].as_str().unwrap_or("");
@@ -45,7 +52,7 @@ async fn handle_mcp_request(
             "serverInfo": { "name": "amadeus-mcp", "version": env!("CARGO_PKG_VERSION") }
         })),
         "tools/list" => Ok(tools_list()),
-        "tools/call" => handle_tool_call(client, env, client_ip, &request["params"]).await,
+        "tools/call" => handle_tool_call(client, env, client_ip, headers, &request["params"]).await,
         _ => Err(err("unknown method")),
     };
 
@@ -59,6 +66,7 @@ async fn handle_tool_call(
     client: &BlockchainClient,
     env: &Env,
     client_ip: Option<String>,
+    headers: HashMap<String, String>,
     params: &Value,
 ) -> std::result::Result<Value, Value> {
     let tool = params["name"].as_str().unwrap_or("");
@@ -145,7 +153,7 @@ async fn handle_tool_call(
                 .map(|s| ok(&json!({ "contract_address": addr, "key": key, "value": s })))
                 .map_err(|e| err(&e.to_string()))
         }
-        "claim_testnet_ama" => claim_testnet_ama(env, client_ip, args).await,
+        "claim_testnet_ama" => claim_testnet_ama(env, client_ip, headers, args).await,
         _ => Err(err("unknown tool")),
     }
 }
@@ -193,6 +201,7 @@ const CLAIM_COOLDOWN_SECS: f64 = 86400.0;
 async fn claim_testnet_ama(
     env: &Env,
     client_ip: Option<String>,
+    headers: HashMap<String, String>,
     args: &Value,
 ) -> std::result::Result<Value, Value> {
     let ip = client_ip.ok_or_else(|| err("could not determine client IP"))?;
@@ -202,6 +211,15 @@ async fn claim_testnet_ama(
     let now = (Date::now().as_millis() / 1000) as f64;
 
     let db = env.d1("MCP_DATABASE").map_err(|e| err(&e.to_string()))?;
+
+    let request_dump = serde_json::to_string(&headers).unwrap_or_default();
+    let ts = Date::now().as_millis().to_string();
+    let _ = db
+        .prepare("INSERT INTO faucet_request_dumps (timestamp, request) VALUES (?1, ?2)")
+        .bind(&[ts.into(), request_dump.into()])
+        .map_err(|e| err(&e.to_string()))?
+        .run()
+        .await;
     let existing: Option<f64> = db
         .prepare("SELECT claimed_at FROM faucet_claims WHERE ip = ?1")
         .bind(&[ip.clone().into()])
