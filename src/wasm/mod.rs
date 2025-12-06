@@ -14,18 +14,14 @@ async fn main(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .map(|v| v.to_string())
         .unwrap_or_else(|_| "https://nodes.amadeus.bot".to_string());
 
-    let client = BlockchainClient::new(blockchain_url)
+    let client = BlockchainClient::new(blockchain_url.clone())
         .map_err(|e| format!("failed to create client: {}", e))?;
 
     if req.method() == Method::Post {
         let client_ip = req.headers().get("CF-Connecting-IP").ok().flatten();
-        let headers: HashMap<String, String> = req
-            .headers()
-            .entries()
-            .map(|(k, v)| (k, v))
-            .collect();
+        let headers: HashMap<String, String> = req.headers().entries().collect();
         let body: Value = req.json().await?;
-        Response::from_json(&handle_mcp_request(&client, &env, client_ip, headers, body).await)
+        Response::from_json(&handle_mcp_request(&client, &env, &blockchain_url, client_ip, headers, body).await)
     } else {
         Response::from_json(&json!({
             "name": "amadeus-mcp",
@@ -36,15 +32,11 @@ async fn main(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
 }
 
 async fn handle_mcp_request(
-    client: &BlockchainClient,
-    env: &Env,
-    client_ip: Option<String>,
-    headers: HashMap<String, String>,
-    request: Value,
+    client: &BlockchainClient, env: &Env, rpc: &str, client_ip: Option<String>,
+    headers: HashMap<String, String>, request: Value,
 ) -> Value {
     let method = request["method"].as_str().unwrap_or("");
     let id = request.get("id").cloned();
-
     let result: std::result::Result<Value, Value> = match method {
         "initialize" => Ok(json!({
             "protocolVersion": "2024-11-05",
@@ -52,7 +44,7 @@ async fn handle_mcp_request(
             "serverInfo": { "name": "amadeus-mcp", "version": env!("CARGO_PKG_VERSION") }
         })),
         "tools/list" => Ok(tools_list()),
-        "tools/call" => handle_tool_call(client, env, client_ip, headers, &request["params"]).await,
+        "tools/call" => handle_tool_call(client, env, rpc, client_ip, headers, &request["params"]).await,
         _ => Err(err("unknown method")),
     };
 
@@ -63,15 +55,11 @@ async fn handle_mcp_request(
 }
 
 async fn handle_tool_call(
-    client: &BlockchainClient,
-    env: &Env,
-    client_ip: Option<String>,
-    headers: HashMap<String, String>,
-    params: &Value,
+    client: &BlockchainClient, env: &Env, rpc: &str, client_ip: Option<String>,
+    headers: HashMap<String, String>, params: &Value,
 ) -> std::result::Result<Value, Value> {
     let tool = params["name"].as_str().unwrap_or("");
     let args = &params["arguments"];
-
     match tool {
         "create_transfer" => {
             let req: TransferRequest =
@@ -154,6 +142,33 @@ async fn handle_tool_call(
                 .map_err(|e| err(&e.to_string()))
         }
         "claim_testnet_ama" => claim_testnet_ama(env, client_ip, headers, args).await,
+        "get_entry_tip" => fetch_json(&format!("{rpc}/api/chain/tip")).await,
+        "get_entry_by_hash" => {
+            let h = args["hash"].as_str().ok_or_else(|| err("missing hash"))?;
+            fetch_json(&format!("{rpc}/api/chain/hash/{h}")).await
+        }
+        "get_block_with_txs" => {
+            let h = args["height"].as_u64().ok_or_else(|| err("missing height"))?;
+            fetch_json(&format!("{rpc}/api/chain/height_with_txs/{h}")).await
+        }
+        "get_txs_in_entry" => {
+            let h = args["entry_hash"].as_str().ok_or_else(|| err("missing entry_hash"))?;
+            fetch_json(&format!("{rpc}/api/chain/txs_in_entry/{h}")).await
+        }
+        "get_epoch_score" => {
+            let url = match args["address"].as_str() {
+                Some(pk) => format!("{rpc}/api/epoch/score/{pk}"),
+                None => format!("{rpc}/api/epoch/score"),
+            };
+            fetch_json(&url).await
+        }
+        "get_emission_address" => {
+            let pk = args["address"].as_str().ok_or_else(|| err("missing address"))?;
+            fetch_json(&format!("{rpc}/api/epoch/get_emission_address/{pk}")).await
+        }
+        "get_richlist" => fetch_json(&format!("{rpc}/api/contract/richlist")).await,
+        "get_nodes" => fetch_json(&format!("{rpc}/api/peer/nodes")).await,
+        "get_removed_validators" => fetch_json(&format!("{rpc}/api/peer/removed_trainers")).await,
         _ => Err(err("unknown tool")),
     }
 }
@@ -179,6 +194,15 @@ fn tools_list() -> Value {
             json!({ "contract_address": str_prop(), "key": str_prop() }), vec!["contract_address", "key"]),
         tool("claim_testnet_ama", "Claims testnet AMA tokens to the specified address (once per 24 hours per IP)",
             json!({ "address": str_prop() }), vec!["address"]),
+        tool("get_entry_tip", "Get the latest blockchain entry", json!({}), vec![]),
+        tool("get_entry_by_hash", "Get entry by hash", json!({ "hash": str_prop() }), vec!["hash"]),
+        tool("get_block_with_txs", "Get block at height with full transactions", json!({ "height": { "type": "number" } }), vec!["height"]),
+        tool("get_txs_in_entry", "Get all transactions in an entry", json!({ "entry_hash": str_prop() }), vec!["entry_hash"]),
+        tool("get_epoch_score", "Get validator mining scores (optionally for specific address)", json!({ "address": str_prop() }), vec![]),
+        tool("get_emission_address", "Get emission address for a validator", json!({ "address": str_prop() }), vec!["address"]),
+        tool("get_richlist", "Get top AMA token holders", json!({}), vec![]),
+        tool("get_nodes", "Get connected peer nodes", json!({}), vec![]),
+        tool("get_removed_validators", "Get validators removed this epoch", json!({}), vec![]),
     ]})
 }
 
@@ -194,6 +218,14 @@ fn err(msg: &str) -> Value {
 }
 fn ok<T: serde::Serialize>(data: &T) -> Value {
     json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(data).unwrap() }] })
+}
+
+async fn fetch_json(url: &str) -> std::result::Result<Value, Value> {
+    let mut resp = worker::Fetch::Url(worker::Url::parse(url).map_err(|e| err(&e.to_string()))?)
+        .send().await.map_err(|e| err(&e.to_string()))?;
+    let json: Value = serde_json::from_str(&resp.text().await.map_err(|e| err(&e.to_string()))?)
+        .map_err(|e| err(&e.to_string()))?;
+    Ok(ok(&json))
 }
 
 const CLAIM_COOLDOWN_SECS: f64 = 86400.0;
