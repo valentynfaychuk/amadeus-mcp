@@ -15,7 +15,7 @@ Add the following to the `mcpServers` object in your `settings.json` file:
 {
   "mcpServers": {
     "amadeus": {
-      "httpUrl": "https://amadeus-mcp.faychuk.workers.dev",
+      "httpUrl": "https://mcp.ama.one",
     }
   }
 }
@@ -26,7 +26,7 @@ Add the following to the `mcpServers` object in your `settings.json` file:
 Run this command. See [Claude Code MCP docs](https://docs.anthropic.com/en/docs/claude-code/mcp) for more info.
 
 ```sh
-claude mcp add --transport http amadeus https://amadeus-mcp.faychuk.workers.dev
+claude mcp add --transport http amadeus https://mcp.ama.one
 ```
 
 Or open the Claude Code config file. The location is `~/.claude.json`.
@@ -36,7 +36,7 @@ Find the following to the `mcpServers` object in the desired folder section:
 "mcpServers": {
   "amadeus": {
     "type": "http",
-    "url": "https://amadeus-mcp.faychuk.workers.dev"
+    "url": "https://mcp.ama.one"
   }
 }
 ```
