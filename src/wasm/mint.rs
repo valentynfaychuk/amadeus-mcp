@@ -22,8 +22,8 @@ pub async fn transfer(env: &Env, address: &str) -> Result<String, Value> {
         .into_vec()
         .map_err(|_| err("invalid address encoding"))?;
 
-    if receiver.len() != 48 {
-        return Err(err("address must be 48 bytes"));
+    if receiver.len() < 44 || receiver.len() > 48 {
+        return Err(err("address must be 44-48 bytes"));
     }
 
     let built = tx::build_transfer_tx(&sk, &receiver, FAUCET_SYMBOL, FAUCET_AMOUNT).map_err(err)?;
