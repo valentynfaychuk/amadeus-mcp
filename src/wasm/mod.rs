@@ -200,7 +200,7 @@ fn serve_faucet_page() -> Result<Response> {
                     autocomplete="off"
                     spellcheck="false"
                 >
-                <div class="error-text" id="addressError">Invalid address format. Must be 45-55 alphanumeric characters (Base58).</div>
+                <div class="error-text" id="addressError">Invalid address format. Must be 60 alphanumeric characters (Base58).</div>
             </div>
             <button type="submit" id="submitBtn">Claim $AMA</button>
         </form>
@@ -220,7 +220,7 @@ fn serve_faucet_page() -> Result<Response> {
         const resultContent = document.getElementById('resultContent');
 
         // Base58 alphabet (excludes 0, O, I, l)
-        const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{45,55}$/;
+        const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{60}$/;
 
         function validateAddress(address) {
             return base58Regex.test(address);
