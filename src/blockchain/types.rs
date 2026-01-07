@@ -23,16 +23,9 @@ pub struct SignedTransaction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitResponse {
-    pub transaction_hash: String,
-    pub status: TransactionStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransactionStatus {
-    Pending,
-    Confirmed,
-    Failed,
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]

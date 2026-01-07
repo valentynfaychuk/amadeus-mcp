@@ -89,11 +89,18 @@ impl BlockchainMcpServer {
             .await
             .map_err(|e| Self::blockchain_error("submit_transaction", e))?;
 
-        Ok(Json(serde_json::json!({
-            "transaction_hash": response.transaction_hash,
-            "status": response.status,
-            "message": "Transaction submitted successfully"
-        })))
+        if response.error == "ok" {
+            Ok(Json(serde_json::json!({
+                "status": "success",
+                "message": "Transaction submitted successfully",
+                "tx_hash": response.tx_hash
+            })))
+        } else {
+            Err(McpError::internal_error(
+                "submission_failed",
+                Some(serde_json::json!({ "error": response.error })),
+            ))
+        }
     }
 
     #[tool(
