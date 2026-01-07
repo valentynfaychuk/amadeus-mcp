@@ -1,7 +1,11 @@
 pub mod tx;
 
 #[cfg(target_arch = "wasm32")]
+mod mint;
+
+#[cfg(target_arch = "wasm32")]
 mod worker_handlers {
+use super::mint;
 use crate::blockchain::*;
 use crate::BlockchainClient;
 use serde_json::{json, Value};
@@ -352,7 +356,7 @@ async fn handle_tool_call(
                 serde_json::from_value(args.clone()).map_err(|e| err(&e.to_string()))?;
             let url = match tx.network.as_deref() {
                 Some("testnet") => env.var("AMADEUS_TESTNET_RPC").map(|v| v.to_string()).unwrap_or_else(|_| "https://testnet.amadeus.bot".to_string()),
-                _ => blockchain_url.clone(),
+                _ => rpc.to_string(),
             };
             client
                 .submit_signed_transaction(tx, &url)

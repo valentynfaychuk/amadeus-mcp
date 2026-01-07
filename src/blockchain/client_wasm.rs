@@ -3,7 +3,6 @@ use super::{
     types::*,
 };
 use crate::wasm::tx;
-use serde_json::json;
 use worker::{Fetch, Method, Request, RequestInit};
 
 #[derive(Clone)]

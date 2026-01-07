@@ -15,7 +15,7 @@ Add the following to the `mcpServers` object in your `settings.json` file:
 {
   "mcpServers": {
     "amadeus": {
-      "httpUrl": "https://amadeus-mcp.faychuk.workers.dev",
+      "httpUrl": "https://mcp.ama.one",
     }
   }
 }
@@ -26,7 +26,7 @@ Add the following to the `mcpServers` object in your `settings.json` file:
 Run this command. See [Claude Code MCP docs](https://docs.anthropic.com/en/docs/claude-code/mcp) for more info.
 
 ```sh
-claude mcp add --transport http amadeus https://amadeus-mcp.faychuk.workers.dev
+claude mcp add --transport http amadeus https://mcp.ama.one
 ```
 
 Or open the Claude Code config file. The location is `~/.claude.json`.
@@ -36,34 +36,23 @@ Find the following to the `mcpServers` object in the desired folder section:
 "mcpServers": {
   "amadeus": {
     "type": "http",
-    "url": "https://amadeus-mcp.faychuk.workers.dev"
+    "url": "https://mcp.ama.one"
   }
 }
 ```
 
 ## Tools
 
-### Transaction Tools
-- `create_transfer` - Build unsigned transaction blob
-- `submit_transaction` - Broadcast signed transaction
-
-### Account & Balance Tools
-- `get_account_balance` - Query all token balances for an account
-
-### Blockchain Query Tools
-- `get_chain_stats` - Get current blockchain statistics (height, total transactions, total accounts)
-- `get_block_by_height` - Retrieve blockchain entries at a specific height
-- `get_transaction` - Get detailed transaction information by hash
-- `get_transaction_history` - Query transaction history for an account (with pagination)
-
-### Network Tools
-- `get_validators` - Get list of current validator nodes (trainers)
-
-### Smart Contract Tools
-- `get_contract_state` - Query smart contract storage by address and key
-
-### Faucet Tools
-- `claim_testnet_ama` - Claim testnet AMA tokens (once per 24 hours per IP)
+- `create_transaction` - Create unsigned transaction for any contract call (args: signer, contract, function, args)
+- `submit_transaction` - Submit signed transaction (args: transaction, signature, network: mainnet|testnet)
+- `get_account_balance` - Query account balances
+- `get_chain_stats` - Get blockchain statistics
+- `get_block_by_height` - Get entries at height
+- `get_transaction` - Get transaction by hash
+- `get_transaction_history` - Get account transaction history
+- `get_validators` - List validators
+- `get_contract_state` - Query contract storage
+- `claim_testnet_ama` - Claim testnet tokens (once per 24h per IP)
 
 ## Development
 
@@ -94,9 +83,9 @@ wrangler secret put BLOCKCHAIN_API_KEY
 ### Configuration
 
 ```bash
-BLOCKCHAIN_URL=https://nodes.amadeus.bot
-AMADEUS_TESTNET_RPC=https://nodes.amadeus.bot
-AMADEUS_TESTNET_SK (secret, base58-encoded 64-byte key)
+BLOCKCHAIN_URL=https://nodes.amadeus.bot (mainnet, default)
+AMADEUS_TESTNET_RPC=https://testnet.amadeus.bot (testnet, default)
+AMADEUS_TESTNET_SK (secret, base58-encoded 64-byte key for faucet)
 MCP_DATABASE (D1 binding)
 ```
 
@@ -106,3 +95,20 @@ Create the faucet_claims table in D1:
 ```sql
 CREATE TABLE faucet_claims (ip TEXT PRIMARY KEY, address TEXT, claimed_at INTEGER);
 ```
+
+## Creating Transactions
+
+TypeScript/JavaScript example:
+
+```bash
+cd examples && npm install @noble/curves bs58
+node sign-transaction.mjs <sk_base58> <contract> <function> '<args_json>' [network]
+```
+
+Examples:
+```bash
+node sign-transaction.mjs YOUR_SK Coin transfer '[{"b58":"RECIPIENT"},"1000000000","AMA"]'
+node sign-transaction.mjs YOUR_SK Coin transfer '[{"b58":"RECIPIENT"},"1000000000","AMA"]' testnet
+```
+
+Creates unsigned transaction via MCP, signs locally with BLS12-381, submits to mainnet (default) or testnet.
