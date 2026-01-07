@@ -59,9 +59,10 @@ impl BlockchainClient {
     }
 
     pub async fn submit_signed_transaction(&self, tx: SignedTransaction, url: &str) -> Result<SubmitResponse> {
-        let txu_packed = tx::finalize_transaction(&tx.transaction, &tx.signature)
+        let finalized = tx::finalize_transaction(&tx.transaction, &tx.signature)
             .map_err(|e| BlockchainError::ValidationFailed(e.into()))?;
-        let txu_b58 = bs58::encode(&txu_packed).into_string();
+        let tx_hash = bs58::encode(&finalized.hash).into_string();
+        let txu_b58 = bs58::encode(&finalized.packed).into_string();
         let full_url = format!("{}/api/tx/submit", url);
 
         let mut init = RequestInit::new();
@@ -87,8 +88,14 @@ impl BlockchainClient {
         let text = response.text().await
             .map_err(|e| BlockchainError::HttpRequestWasm(e.to_string()))?;
 
-        serde_json::from_str(&text)
-            .map_err(|e| BlockchainError::InvalidResponse(e.to_string()))
+        let api_response: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| BlockchainError::InvalidResponse(e.to_string()))?;
+        let error = api_response.get("error").and_then(|e| e.as_str()).unwrap_or("unknown");
+
+        Ok(SubmitResponse {
+            error: error.to_string(),
+            tx_hash: if error == "ok" { Some(tx_hash) } else { None },
+        })
     }
 
     pub async fn get_account_balance(&self, address: &str) -> Result<AccountBalance> {

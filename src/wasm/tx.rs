@@ -51,7 +51,12 @@ struct TxU {
     tx: Tx,
 }
 
-pub fn finalize_transaction(tx_blob_b58: &str, signature_b58: &str) -> Result<Vec<u8>, &'static str> {
+pub struct FinalizedTx {
+    pub packed: Vec<u8>,
+    pub hash: [u8; 32],
+}
+
+pub fn finalize_transaction(tx_blob_b58: &str, signature_b58: &str) -> Result<FinalizedTx, &'static str> {
     let tx_encoded = bs58::decode(tx_blob_b58).into_vec().map_err(|_| "invalid blob base58")?;
     let signature = bs58::decode(signature_b58).into_vec().map_err(|_| "invalid signature base58")?;
     let tx: Tx = vecpak::from_slice(&tx_encoded).map_err(|_| "failed to decode tx")?;
@@ -62,7 +67,8 @@ pub fn finalize_transaction(tx_blob_b58: &str, signature_b58: &str) -> Result<Ve
         signature,
         tx,
     };
-    vecpak::to_vec(&txu).map_err(|_| "failed to encode txu")
+    let packed = vecpak::to_vec(&txu).map_err(|_| "failed to encode txu")?;
+    Ok(FinalizedTx { packed, hash })
 }
 
 pub fn build_unsigned(

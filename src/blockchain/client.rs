@@ -76,9 +76,10 @@ impl BlockchainClient {
 
     #[tracing::instrument(skip(self, tx), fields(tx_hash))]
     pub async fn submit_signed_transaction(&self, tx: SignedTransaction, url: &str) -> Result<SubmitResponse> {
-        let txu_packed = tx::finalize_transaction(&tx.transaction, &tx.signature)
+        let finalized = tx::finalize_transaction(&tx.transaction, &tx.signature)
             .map_err(|e| BlockchainError::ValidationFailed(e.into()))?;
-        let txu_b58 = bs58::encode(&txu_packed).into_string();
+        let tx_hash = bs58::encode(&finalized.hash).into_string();
+        let txu_b58 = bs58::encode(&finalized.packed).into_string();
         let full_url = format!("{}/api/tx/submit", url);
 
         let response = self.client
@@ -93,7 +94,13 @@ impl BlockchainClient {
             return Err(BlockchainError::InvalidResponse(format!("HTTP {}", response.status())));
         }
 
-        self.parse_response(response).await
+        let api_response: serde_json::Value = self.parse_response(response).await?;
+        let error = api_response.get("error").and_then(|e| e.as_str()).unwrap_or("unknown");
+
+        Ok(SubmitResponse {
+            error: error.to_string(),
+            tx_hash: if error == "ok" { Some(tx_hash) } else { None },
+        })
     }
 
     #[tracing::instrument(skip(self), fields(address=%address))]
