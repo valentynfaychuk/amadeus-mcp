@@ -107,8 +107,11 @@ node sign-transaction.mjs <sk_base58> <contract> <function> '<args_json>' [netwo
 
 Examples:
 ```bash
-node sign-transaction.mjs YOUR_SK Coin transfer '[{"b58":"RECIPIENT"},"1000000000","AMA"]'
+# Transfer tokens on testnet
 node sign-transaction.mjs YOUR_SK Coin transfer '[{"b58":"RECIPIENT"},"1000000000","AMA"]' testnet
+
+# Call custom contract on mainnet
+node sign-transaction.mjs YOUR_SK CONTRACT_PK my_function '["arg1",42]' mainnet
 ```
 
-Creates unsigned transaction via MCP, signs locally with BLS12-381, submits to mainnet (default) or testnet.
+The `create_transaction` tool supports all `ama` CLI features: any contract, custom arguments, token attachments (attached_symbol, attached_amount), and custom nonce.
